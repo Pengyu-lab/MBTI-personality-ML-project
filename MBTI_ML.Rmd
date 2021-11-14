@@ -1,0 +1,1044 @@
+---
+title: "PENGYU YANG ST606 project"
+author: "PENGYU YANG"
+date: "2021/4/21"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+<h4>As the size of dataset is big, so pls make sure clearing memory in time </h4> 
+<h4>Alos please make sure all of the packages have been updated </h4。
+
+
+```{r}
+
+memory.limit(150000)
+
+```
+
+
+
+```{r pressure, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(tidyr)
+library(tidymodels) # tidymodeling contains recipe package
+library(readr)
+library(keras)
+library(stringr)
+library(randomForest)
+library(hunspell)
+library(wordcloud)
+library(forcats)
+library(SnowballC)
+library(reshape2)
+library(Rcpp)
+library(MASS) # for LDA C reates problems for select
+library(janitor) # clean up variable names
+library(Rtsne) # for tsne
+library(embed) # for umap
+library(irlba) # svd decomp
+library(correlationfunnel)
+library(ranger)
+library(BKPC) # for marginal relevance  and kernels
+
+```
+
+
+
+```{r}
+
+mbti9k_comments <- read_csv("mbti9k_comments.csv", 
+    col_types = cols(comments_num = col_skip(), 
+        mbti_subreddits_commented = col_skip(), 
+        subreddits_commented = col_skip(), 
+        wc = col_skip()))
+
+mbti9k_comments$type = as.factor(mbti9k_comments$type)
+
+```
+
+
+
+```{r}
+#tidy comment one token per row
+
+tidy_comments <-mbti9k_comments %>% unnest_tokens(word,comment) 
+
+head(tidy_comments)
+
+rm(mbti9k_comments)
+gc()
+
+#saveRDS(tidy_comments,file = "tidy_comments.rds")
+tidy_comments <-readRDS(file = "tidy_comments.rds")
+```
+
+
+
+```{r}
+# remove stop words and list the frequency of the rest words
+
+tidy_no_stop   <- tidy_comments %>% anti_join(get_stopwords())
+
+rm(tidy_comments)
+
+gc()
+```
+
+
+
+```{r}
+
+## Remove or replace number by words and remove website etc
+
+tidy_no_stop <- tidy_no_stop[-grep("http", tidy_no_stop$word), ]
+gc()
+
+tidy_no_stop <- tidy_no_stop[-grep("www.", tidy_no_stop$word), ]
+gc()
+
+tidy_no_stop <- tidy_no_stop[-grep(".com", tidy_no_stop$word), ]
+gc()
+
+tidy_no_stop <- tidy_no_stop[-grep("here_it_is", tidy_no_stop$word), ]
+gc()
+
+tidy_no_stop <- tidy_no_stop[!str_detect(tidy_no_stop$word,"[^\x01-\x7F]"),]
+gc()
+
+tidy_no_stop <- tidy_no_stop[!str_detect(tidy_no_stop$word,"[0-9*]"),]
+gc()
+
+saveRDS(tidy_no_stop, file = "tidy_com_nostop.rds")
+
+```
+
+
+
+Find misspelled words and remove them using a costom dictionary. Tidy up memory.
+
+```{r}
+## find the misspelled words
+tidy_no_stop$word <- as.character(tidy_no_stop$word)
+tidy_no_stop$type <- as.factor(tidy_no_stop$type)
+
+bad.words <- hunspell(tidy_no_stop$word)
+bad.words1 <- unlist(bad.words)
+
+
+# custom stop words
+custom_stop_words <- bind_rows(stop_words, data_frame(word = bad.words1,
+           lexicon = "custom"))
+
+```
+
+
+```{r}
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="like",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="mbti",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="atm",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="btw",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="bff",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="lol",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="booooring",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="overdetermined",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="xkcd",]
+custom_stop_words <- custom_stop_words[custom_stop_words$word!="hyperfocus",]
+
+tidy_comments <- tidy_comments %>% anti_join(custom_stop_words)
+```
+
+
+```{r}
+
+# Restore the object
+tidy_no_stop <- readRDS(file = "tidy_com_nostop.rds")
+
+```
+
+
+
+<h2>Top words used in total</h2>
+
+```{r}
+
+tidy_comments_visual <-tidy_no_stop %>%
+                          count(word,sort = TRUE) %>%
+                          mutate(word = reorder(word,n))
+
+# visualizing the top words  
+ggplot(data=tidy_comments_visual[1:20,],aes(x = word, y = n))+
+  geom_col()+ 
+  coord_flip()
+
+```
+
+```{r}
+#saveRDS(tidy_comments_visual, file = "tidy_com_visual.rds")
+tidy_comments_visual <- readRDS(file = "tidy_com_visual.rds")
+
+```
+
+
+
+
+<h3>word cloud </h3> 
+```{r}
+# word cloud
+
+tidy_comments_visual %>% 
+  mutate(word = reorder(word,n))%>% 
+  with(wordcloud(word, n, random.order = FALSE, max.words = 100, colors = "#F29545"))
+
+```
+
+
+
+
+```{r}
+
+# high frequencies words used in each type
+
+tidy_comments_bytype <- tidy_no_stop %>% 
+                      count(type,word,sort = TRUE) %>% 
+                      group_by(type) %>%
+                      arrange(type) 
+
+tidy_comments_bytype$type <- as.factor(tidy_comments_bytype$type)
+
+
+# save rds
+saveRDS(tidy_comments_bytype, file = "tidy_com_bytype.rds")
+tidy_comments_bytype <- readRDS(file = "tidy_com_bytype.rds")
+
+
+
+# the percentage of words used in each type (filter the words used over 500 times)
+
+new_tidy_comments_bytype <- tidy_comments_bytype %>% filter( n>500) %>% 
+                        group_by(type) %>% 
+                        mutate(total = sum(n), percent = n/total)
+```
+
+
+```{r}
+
+# top 15 high frequencies words used in each type
+new_tidy_comments_bytype %>%
+      top_n(n, n = 15) %>% #slice_max
+      ungroup() %>% 
+      ggplot(aes(n, fct_reorder(word, n), fill = type)) +
+      geom_col(show.legend = FALSE) +
+      facet_wrap(~type, ncol = 4, scales = "free") +
+      labs(x = "n", y = NULL)
+
+```
+
+
+```{r}
+# high frequencies words used in each type
+gc()
+tidy_comments_byauthor <- tidy_no_stop %>% 
+                      count(author,word,sort = TRUE) %>% 
+                      group_by(author) %>%
+                      arrange(author) 
+
+tidy_comments_byauthor$author <- as.factor(tidy_comments_byauthor$author)
+
+
+# save author rds
+#saveRDS(tidy_comments_byauthor, file = "tidy_com_byauthor.rds")
+tidy_comments_byauthor <- readRDS(file = "tidy_com_byauthor.rds")
+
+
+
+```
+
+<h1>TF-IDF</h1>
+```{r}
+#tf-idf
+
+total_words <- tidy_comments_bytype %>%
+  group_by(type) %>% 
+  summarize(total_in_type = sum(n))
+
+
+#how many words 
+
+comment_words <- left_join(tidy_comments_bytype, total_words)
+
+
+comment_tf_idf <- comment_words %>%
+  bind_tf_idf(word, type, n)
+
+
+comment_tf_idf  %>%
+  dplyr::select(-total_in_type) %>%
+  arrange(desc(tf_idf))
+
+comment_tf_idf %>%
+  group_by(type) %>%
+  top_n(tf_idf, n = 15) %>% #slice_max
+  ungroup() %>%
+  ggplot(aes(y=tf_idf, x=fct_reorder(word, tf_idf), fill = type)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip()+
+  facet_wrap(~type, ncol = 4, scales = "free") +
+  labs(x = "tf-idf", y = NULL)
+
+
+rm(comment_words)
+
+
+```
+
+```{r}
+# saveRDS(comment_tf_idf, "comment_tf_idf.rds")
+comment_tf_idf <- readRDS(file = "comment_tf_idf.rds")
+
+```
+
+
+TF - IDF by author (for analysis):
+
+```{r}
+# this step has been done above
+#tidy_comments_byauthor <- tidy_no_stop %>% 
+#                      count(author,word,sort = TRUE) %>% 
+#                      group_by(author) %>%
+#                      arrange(author) 
+
+
+total_words <- tidy_comments_byauthor %>% 
+  group_by(author) %>% 
+  summarize(total = sum(n))
+
+tidy_author_words <- left_join(tidy_comments_byauthor, total_words)
+
+
+```
+
+```{r}
+
+# words at appear in at least 8000 different comments
+words_8000 <- tidy_comments_byauthor %>%
+  group_by(word) %>%
+  summarise(n = n()) %>%
+  filter(n >= 8000) %>%
+  dplyr::select(word)
+
+
+#saveRDS(words_5000, file = "words_5000.rds")
+#saveRDS(words_8000, file = "words_8000.rds")
+
+words_5000 <- readRDS(file = "words_5000.rds")
+words_8000 <- readRDS(file = "words_8000.rds")
+
+
+tidy_author_words2 <-  tidy_author_words %>% right_join(words_8000, by = "word")
+
+
+
+```
+
+
+
+Redo tf-idf (author)
+```{r}
+
+author_tf_idf <- tidy_author_words2 %>%
+  bind_tf_idf(word, author, n)
+
+#saveRDS(author_tf_idf, file = "author_tf_idf.rds")
+
+author_tf_idf  %>%
+  dplyr::select(-total) %>%
+  arrange(tf_idf)
+
+
+```
+
+Get the dataset in tidy format (sparse here).
+```{r}
+library(tm)
+
+xt <- author_tf_idf %>%
+      cast_dtm(author, word, tf_idf)
+
+```
+
+
+Break out of sparse format
+```{r}
+xt2 <- xt %>% as.matrix() %>% as.data.frame()
+xt2 <- xt2 %>% mutate(author = dimnames(xt)[[1]])
+xt2[1:5, 1:5]
+
+rm(xt)
+
+```
+
+
+
+<h2>Sentiments anaylysis</h2>
+```{r}
+#Sentiment lexicons
+get_sentiments("bing")
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+# implement sentiment analysis(qingxu fenxi) in comments with bing sentiment lexicons(qingxu cihui)
+
+comment_sentiment <-tidy_comments_bytype %>%
+                    inner_join(get_sentiments('bing'))
+
+# find of how many positive and negative words each type of personality has
+comment_sentiment_count <-comment_sentiment %>%
+                    count(type,sentiment) %>% view()
+
+```
+
+
+
+```{r}
+
+#find the percentage of negative words in each personality type
+
+comment_sentiment_count_new <- comment_sentiment_count %>% 
+  group_by(type) %>%
+  mutate(total = sum(n), percent =round( n/total *100, 5))
+
+comment_sentiment_count_new$sentiment <- as.factor(comment_sentiment_count_new$sentiment)
+
+comment_sentiment_count_new %>%
+  ggplot(aes(x = type, y = percent,fill = sentiment))+ geom_col()+
+  ggtitle('Sentiments percentage (By type)')
+
+
+rm(comment_sentiment)
+```
+
+```{r}
+#sentiments by author
+
+comment_sentiment2 <- tidy_comments_byauthor %>%
+                    inner_join(get_sentiments('bing'))
+
+
+author_comment_sentiment <- comment_sentiment2 %>% count(author,sentiment) %>% 
+  group_by(author) %>%
+  mutate(total = sum(n), percent = round(n/total * 100,5)) %>%
+  # filter the results for only negative sentiment in each type
+  filter(sentiment == 'negative') 
+  
+author_comment_sentiment %>% arrange(desc(percent))
+
+rm(comment_sentiment2)
+
+```
+
+```{r}
+
+meta <- tidy_no_stop %>%  dplyr::select(c("author", "type")) 
+
+meta <- meta %>% group_by(author,type) %>% count(author,type) %>% dplyr::select(c("author", "type"))
+
+#saveRDS(meta, file = "meta.rds")
+gc()
+
+author_comment_sentiment<- author_comment_sentiment %>%
+  left_join(meta, by = "author")
+
+#saveRDS(author_comment_sentiment, file = "author_comment_sentiment.rds")
+author_comment_sentiment <- readRDS(file = "author_comment_sentiment.rds")
+
+author_comment_sentiment %>% ggplot(aes(x= type, y = percent)) +geom_boxplot()+
+  ggtitle("Negative sentiments by type & author")
+
+
+rm(tidy_no_stop)
+gc()
+```
+
+Sentiments in word cloud
+```{r warning=FALSE}
+
+tidy_comments_visual1 <- tidy_comments_visual %>% 
+             inner_join(get_sentiments("bing"))
+
+tidy_comments_visual1 $sentiment <- as.factor(tidy_comments_visual1$sentiment)
+
+tidy_comments_visual1 %>% acast(word~ sentiment, value.var = "n",fill = 0) %>%
+  comparison.cloud(colors = c("#F8766D", "#00BFC4"),max.words = 100, title.size =2,
+                   title.colors = 'white',title.bg.colors = 'lightpink' )
+
+```
+
+clean memory
+```{r}
+rm(tidy_comments_visual)
+gc()
+
+```
+
+Save version with sentiments.
+```{r}
+
+xt3 <- xt2 %>% dplyr::select(-author) #remove author column
+
+xt4 <- xt3[rowSums(xt3)>0,]
+xt4 <- xt2[rownames(xt4),]
+
+xt5 <- xt4 %>%
+  left_join(meta[!duplicated(meta$author), ], by = "author")
+
+
+xt6 <- xt5 %>% 
+  left_join(author_comment_sentiment, by = "author")
+
+xt6 <- xt6  %>% dplyr::select(-c(sentiment,n))
+xt6 <- xt6  %>% na.omit()
+               
+
+xt6  <- xt6 %>% rename(type = type.x, mbtitype = type.y)
+names(xt6)
+
+saveRDS(xt6,"xt6.rds")
+
+rm(xt3)
+rm(xt4)
+rm(xt5)
+rm(tidy_author_words)
+rm(tidy_author_words2)
+
+```
+
+
+Exploratory analysis
+
+Read in the data
+
+```{r}
+set.seed(12345)
+
+xt6 <- readRDS("subtract_type.rds")
+
+xt6 <- readRDS("xt6.rds")
+
+```
+
+
+To simplify work with only the introverts/extroverts.
+```{r}
+xt6 <- xt6 %>% mutate(labelmbtiintrovert = substring(mbtitype, 1, 1))
+xt6 <- xt6 %>% mutate(labelmbtisensing = substring(mbtitype, 2, 2))
+xt6 <- xt6 %>% mutate(labelmbtithinking = substring(mbtitype, 3, 3))
+xt6 <- xt6 %>% mutate(labelmbtijudging = substring(mbtitype, 4, 4))
+```
+
+
+Rename variables
+```{r}
+xt6 <- xt6 %>% rename(percentnegative = percent)
+xt6 <- xt6 %>% rename(labelmbtitype = mbtitype)
+xt6 <- janitor::clean_names(xt6)
+```
+
+Correlation funnel plot
+```{r}
+xt6_bin <- xt6 %>%
+  binarize(n_bins = 5, thresh_infreq = 0.001, name_infreq = "OTHER", one_hot = TRUE)
+
+
+xt6_corr <- xt6_bin%>% 
+  rename(mbtiintrovert__e = labelmbtiintrovert__e) %>% 
+  dplyr::select(!starts_with("label")) %>% 
+  correlate(mbtiintrovert__e)
+
+
+xt6_corr[1:30,] %>%
+  plot_correlation_funnel()
+
+```
+
+
+```{r}
+xt6_corr <- xt6_bin %>% 
+  rename(mbtisensing__n = labelmbtisensing__n) %>% 
+  dplyr::select(!starts_with("label")) %>% 
+  correlate(mbtisensing__n)
+
+xt6_corr[1:30,] %>%
+  plot_correlation_funnel()
+```
+
+
+
+```{r}
+xt6_corr <- xt6_bin %>% 
+  rename(thinking__f = labelmbtithinking__f) %>% 
+  dplyr::select(!starts_with("label")) %>% 
+  correlate(thinking__f)
+
+xt6_corr[1:30,] %>%
+  plot_correlation_funnel()
+```
+
+
+```{r}
+xt6_corr <- xt6_bin %>% rename(mbtijudging__j = labelmbtijudging__j) %>% dplyr::select(!starts_with("label")) %>% correlate(mbtijudging__j)
+
+xt6_corr[1:30,] %>%
+  plot_correlation_funnel()
+```
+
+
+
+<h1>Random sampling</h1>
+Scale and center data
+```{r warning=FALSE}
+me <- apply(xt6 %>% dplyr::select(!starts_with("label")), 2, mean)
+sd <- apply(xt6 %>% dplyr::select(!starts_with("label")), 2, sd)
+
+x.sc <- sweep(xt6 %>% dplyr::select(!starts_with("label")), 2, me, "-")
+x.sc <- sweep(x.sc , 2, sd, "/")
+x.sc <- x.sc  %>% bind_cols(xt6 %>% dplyr::select(starts_with("label")))
+xt6 <- x.sc
+
+
+
+```
+
+
+```{r}
+xt6  <- xt6 %>% arrange(labelmbtitype)
+
+table(xt6$labelmbtitype)
+```
+
+
+```{r}
+set.seed(2021)
+
+trainIndex <- c(sample(table(xt6$labelmbtiintrovert)[1], 1000),               
+                table(xt6$labelmbtiintrovert)[1] + 
+                sample(table(xt6$labelmbtiintrovert)[2],5500))
+
+
+table(xt6$labelmbtiintrovert)
+
+```
+
+```{r}
+# Set training dataset and test dataset
+
+data_df_train <- xt6[trainIndex, ] 
+data_df_test <- xt6[-trainIndex, ]
+
+```
+
+
+<h1>Marginal relevance</h1>
+```{r}
+#find MR scores
+
+dtf <-  data_df_train %>% rename(mbtitype = labelmbtiintrovert) %>% 
+  dplyr::select(!starts_with("label")) %>% mutate(mbtitype = as.factor(mbtitype))
+
+
+dtf <- dtf %>% dplyr::select(-c(author, type, total, percentnegative))
+
+margRelv <- marginalRelevance(dtf %>% dplyr::select(!mbtitype),dtf$mbtitype)
+
+
+
+
+mr <- t(margRelv$score) %>% as.tibble() %>% rename(value = V1)
+
+mr <- mr %>% mutate(word = names(dtf %>%  dplyr::select(!mbtitype)))
+
+mr <- mr %>% arrange(desc(value))
+mr2 <- mr[1:25,]
+mr2 %>%
+  mutate(word = reorder(word,value)) %>% ggplot(aes(x = word, y = value))  + geom_point()  + coord_flip() + ggtitle("MR: introvert - extrovert")
+
+
+```
+
+
+<h1>Dimension reduction</h1>
+<h2>PCA</h2>
+
+```{r}
+
+# choose numeric variables
+data_df_train1 <- data_df_train %>% dplyr::select(-c(author, type, total, percentnegative))
+
+pctext <- prcomp(data_df_train1 %>%  dplyr::select(!starts_with("label")),scale. = TRUE )
+
+tidyPCA <- tibble(PC1 = pctext$x[,1], PC2 = pctext$x[,2], PC3 = pctext$x[,3])
+tidyPCA <- tidyPCA %>% mutate(type = data_df_train$labelmbtitype, typei = data_df_train$labelmbtiintrovert, types = data_df_train$labelmbtisensing,
+                              types = data_df_train$labelmbtisensing,  typet = data_df_train$labelmbtithinking,  typej = data_df_train$labelmbtijudging)
+
+tidyPCA %>% ggplot(aes(PC1, PC2, col = type)) + geom_point()
+```
+
+
+```{r}
+
+tidyPCA %>% ggplot(aes(PC1, PC2,col = typei)) + geom_point() + 
+  scale_colour_manual( values = c("darkblue", "lightgreen"),name = "Type" ,
+                       labels = c("Extrovert", "Introvert"))
+  
+  
+```
+
+
+```{r}
+tidyPCA %>% ggplot(aes(PC1, PC2, col = types)) + geom_point() + 
+  scale_colour_manual( values = c("aquamarine2", "lightcoral"),
+                       name = "Type",labels = c("Intuitive", "Sensor"))
+```
+
+
+```{r}
+tidyPCA %>% ggplot(aes(PC1, PC2, col = typet)) + geom_point()+ 
+  scale_colour_manual( values = c("indianred1", "mediumpurple1"),name = "Type",
+                       labels = c("Feeler", "Thinker"))
+```
+
+
+```{r}
+tidyPCA %>% ggplot(aes(PC1, PC2, col = typej)) + geom_point() + 
+  scale_colour_manual( values = c("pink1", "steelblue2"),name = "Type",
+                       labels = c("Judger", "Perceiver"))
+```
+
+----------------------- Density-----------------------
+```{r}
+tidyPCA %>% ggplot(aes(PC2, fill = typet)) +
+  geom_density(alpha = 0.7) +
+  scale_fill_manual( values = c("indianred1", "mediumpurple1"),name = "Type",
+                     labels = c("Feeler", "Thinker"))
+
+```
+
+```{r}
+tidyPCA %>% ggplot(aes(PC2, fill = typei)) +
+  geom_density(alpha = 0.7) +
+  scale_fill_manual( values = c("darkblue", "lightgreen"),name = "Type",
+                     labels = c("Extrovert", "Introvert"))
+```
+
+
+```{r}
+tidyPCA %>% ggplot(aes(PC2, fill = types)) +
+  geom_density(alpha = 0.7) +
+  scale_fill_manual( values = c("aquamarine2", "lightcoral"),name = "Type",
+                     labels = c("Intuitive", "Sensor"))
+```
+
+```{r}
+tidyPCA %>% ggplot(aes(PC2, fill = typej)) +
+  geom_density(alpha = 0.7) +
+  scale_fill_manual( values = c("pink1", "steelblue2"),name = "Type",
+                     labels = c("Judger", "Perceiver"))
+```
+
+
+
+
+```{r}
+
+pcwords <- prcomp(data_df_train[ , 1:97] %>% t(), scale. = TRUE )
+
+# biplot(pcwords)
+
+tidyPCA <- tibble(PC1 = pcwords$x[,1], PC3 = pcwords$x[,3], PC2 = pcwords$x[,2],  words = names(data_df_train)[1:97])
+
+tidyPCA %>% ggplot(aes(PC2, PC3))+ geom_text(aes(label = words))
+```
+
+
+```{r}
+tidyPCA %>% ggplot(aes(PC3, PC2))+ geom_text(aes(label = words))
+```
+
+
+```{r}
+library(dendextend)
+
+
+# clustering the columns (variables) rather than observations
+D2 <- as.matrix(1-abs(cor(data_df_train[ , 1:97])))
+
+# image(D2)
+
+
+h2<- hclust(as.dist(D2), method = "ward.D2")
+dnew <- as.dendrogram(h2)
+
+
+
+d2 <- color_branches(dnew,k=15, col = 2:16) 
+
+
+plot(d2)
+
+
+labl.cols <- cutree(d2,15) # 15 variables
+
+labl.cols[labl.cols==1]
+```
+
+
+```{r}
+labl.cols[labl.cols==2]
+```
+
+```{r}
+labl.cols[labl.cols==4]
+```
+
+
+```{r}
+labl.cols[labl.cols==5]
+```
+
+
+```{r}
+labl.cols[labl.cols==6]
+```
+
+
+```{r}
+labl.cols[labl.cols==7]
+```
+
+
+```{r}
+labl.cols[labl.cols==8]
+```
+
+
+```{r}
+labl.cols[labl.cols==9]
+```
+
+
+```{r}
+labl.cols[labl.cols==10]
+```
+
+```{r}
+labl.cols[labl.cols==11]
+```
+
+
+```{r}
+labl.cols[labl.cols==12]
+```
+
+```{r}
+labl.cols[labl.cols==13]
+```
+
+
+```{r}
+labl.cols[labl.cols==14]
+```
+
+
+```{r}
+labl.cols[labl.cols==15]
+```
+
+
+<h1>Tidy PCA</h1>
+
+```{r}
+
+pca_rec <- recipe(~., data = data_df_train1 %>% rename(mbtitype = labelmbtitype) %>%  
+  dplyr::select(!starts_with("label"))) %>%
+  update_role(mbtitype, new_role = "id") %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors())
+
+pca_prep <- prep(pca_rec)
+
+tidied_pca <- tidy(pca_prep, 2)
+
+
+tidied_pca %>%
+  filter(component %in% paste0("PC", 1:4)) %>%
+  group_by(component) %>%
+  top_n(8, abs(value)) %>%
+  ungroup() %>%
+  mutate(terms = reorder_within(terms, abs(value), component)) %>%
+  ggplot(aes(abs(value), terms, fill = value > 0)) +
+  geom_col() +
+  facet_wrap(~component, scales = "free_y") +
+  scale_y_reordered() +
+  labs(
+    x = "Absolute value of contribution",
+    y = NULL, fill = "Positive?"
+  )
+
+
+```
+
+
+
+```{r}
+juice(pca_prep) %>%
+  ggplot(aes(PC2, PC3)) +
+  geom_point(aes(color = mbtitype), alpha = 0.7, size = 2) +
+  labs(color = NULL)
+```
+
+Tidy UMAP
+```{r}
+umap_rec <- recipe(~., data = data_df_train1 %>% rename(mbtitype = labelmbtiintrovert) %>%  
+  dplyr::select(!starts_with("label"))) %>%
+  update_role(mbtitype, new_role = "id") %>%
+  step_normalize(all_predictors()) %>%
+  step_umap(all_predictors())
+
+umap_prep <- prep(umap_rec)
+
+# umap_prep
+
+juice(umap_prep) %>%
+  ggplot(aes(umap_1, umap_2)) +
+  geom_point(aes(color = mbtitype), alpha = 0.7, size = 2) +
+  labs(color = NULL) +ggtitle("UMAP")
+```
+
+T-sne
+With SVD decomp
+```{r}
+S <- irlba(t(data_df_train1 %>% dplyr::select(!starts_with("label"))), nv=20)
+tsne <- Rtsne(S$v , k = 3)
+tydy_tsne <- tsne$Y %>% as.tibble()
+tidy_tsne <- tydy_tsne  %>% mutate(mbtitype  = data_df_train$labelmbtiintrovert)
+
+#plot
+tidy_tsne %>% ggplot(aes(V1, V2, col = mbtitype)) + 
+  geom_point()+ 
+  ggtitle("T-sne E/I") +
+  scale_colour_manual(values= c("steelblue2","yellow2"), 
+                      labels = c("Extrovert","Introvert"),name = "Type")
+
+
+#SVD
+
+tidy_svd %>% ggplot(aes(V3, V2, col = mbtitype)) + 
+  geom_point()+
+  ggtitle("SVD E/I") +
+  scale_colour_manual(values= c("thistle2","turquoise"), 
+                      labels = c("Extrovert","Introvert"),name = "Type")
+```
+
+
+<h1>Classification</h1>
+
+<h2>Random forest </h2>
+```{r}
+dtf <- data_df_train1 %>% 
+  rename(mbtitype = labelmbtiintrovert) %>% 
+  dplyr::select(!starts_with("label")) %>% 
+  mutate(mbtitype = as.factor(mbtitype))
+
+
+data_df_test1 <- data_df_test %>% dplyr::select(-c(author, type, total, percentnegative)) 
+
+dtf_test <- data_df_test1 %>% 
+  rename(mbtitype = labelmbtiintrovert) %>% 
+  dplyr::select(!starts_with("label")) %>% 
+  mutate(mbtitype = as.factor(mbtitype))
+
+modelfitrf2 <- ranger(mbtitype ~ ., importance = "impurity", data = dtf)
+
+```
+
+
+
+```{r}
+pltdtf <- sort(modelfitrf2$variable.importance)[50:97] %>% as.tibble()
+pltdtf <- pltdtf %>% mutate(word = names(sort(modelfitrf2$variable.importance)[50:97]))
+
+pltdtf %>%
+  mutate(word = reorder(word,value)) %>% ggplot(aes(x = word, y = value))  + geom_point()  + coord_flip() + ggtitle("RF: introvert - extrovert")
+```
+
+
+```{r}
+pred.rf <- predict(modelfitrf2, dtf_test)
+t <- table(dtf_test$mbtitype, pred.rf$predictions)
+t
+```
+
+
+
+```{r}
+sum(diag(t))/sum(t)
+
+```
+
+
+<h1>LDA</h1>
+```{r}
+
+dtf1 <- dtf[-c(1,2,4,10,18,20,26,33,47)]
+# Error in lda.default(x, grouping, ...) :  variables  1  2  4 10 18 20 26 33 47 appear to be constant within groups
+
+fit.lda1 <- lda(mbtitype ~. ,  data = dtf1)
+
+predlda1 <- predict(fit.lda1, dtf_test)
+t <- table(dtf_test$mbtitype, predlda1$posterior[,2] > 0.5)
+t
+
+```
+
+
+```{r}
+sum(diag(t))/sum(t)
+
+```
+
+```{r}
+fit.lda1$svd
+```
+
+
+```{r}
+fi <- predlda1$x
+fi <- fi %>% as.tibble() %>% mutate(mbtitype = dtf_test$mbtitype)
+
+
+
+fi %>% ggplot(aes(LD1, fill = mbtitype)) +
+  geom_density(alpha = 0.5) + ggtitle("LDA E/I") + 
+  scale_fill_manual( values = c("lightgreen","yellow"), name = 'Type',
+                     labels = c("Extrovert","Introvert"))
+```
+
+
+```{r}
+fi <- fit.lda1$scaling  %>% as.tibble() %>% mutate(word = rownames(fit.lda1$scaling) )%>% arrange(desc(abs(LD1)))
+
+fi %>%
+  mutate(word = reorder(word,abs(LD1)))%>%
+  top_n(25, abs(LD1))  %>% ggplot(aes(x = word, y = LD1))  + geom_point()  + coord_flip() + ggtitle("LDA : introvert - extrovert")
+```
+
