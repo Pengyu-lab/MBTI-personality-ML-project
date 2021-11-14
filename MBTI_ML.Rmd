@@ -1,7 +1,6 @@
 ---
-title: "PENGYU YANG ST606 project"
+title: "MBTI personality based on Reddit machine learning project "
 author: "PENGYU YANG"
-date: "2021/4/21"
 output: pdf_document
 editor_options: 
   chunk_output_type: console
@@ -13,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 <h4>As the size of dataset is big, so pls make sure clearing memory in time </h4> 
-<h4>Alos please make sure all of the packages have been updated </h4。
+<h4>Also please make sure all of the packages have been updated </h4。
 
 
 ```{r}
@@ -21,8 +20,6 @@ knitr::opts_chunk$set(echo = TRUE)
 memory.limit(150000)
 
 ```
-
-
 
 ```{r pressure, echo=FALSE, message=FALSE, warning=FALSE}
 library(tidyverse)
